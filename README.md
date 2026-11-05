@@ -6,6 +6,23 @@ target highlight, connector, and content-sized popup.
 Requires iOS 15+ and Swift tools 5.9+. No third-party dependencies.
 Initial releases are pre-1.0; the API may change between minor versions.
 
+## iPhone Duo gallery
+
+The standalone FORM / STUDIO demo highlights a native SwiftUI `TabView` item
+across folded/unfolded and portrait/landscape layouts. No Mawgif screens or
+assets are used.
+
+| Folded portrait | Unfolded portrait |
+|---|---|
+| <img src="Documentation/Images/duo-folded-portrait.png" alt="Folded Duo portrait with Projects tab highlighted" width="300"> | <img src="Documentation/Images/duo-unfolded-portrait.png" alt="Unfolded Duo portrait with Projects tab highlighted" width="300"> |
+
+| Folded landscape | Unfolded landscape |
+|---|---|
+| <img src="Documentation/Images/duo-folded-landscape.png" alt="Folded Duo landscape with Projects tab highlighted" width="450"> | <img src="Documentation/Images/duo-unfolded-landscape.png" alt="Unfolded Duo landscape with Projects tab highlighted" width="450"> |
+
+The demo, SwiftUI `tabIndex` steps, `backgroundColor` option, and safe-area/
+overflow improvements shown here are currently on `main`, not in `0.1.0`.
+
 ## Installation
 
 In Xcode, choose **File > Add Package Dependencies** and enter:
@@ -124,8 +141,41 @@ shape/padding, optional ripple, progress (`step` is one-based), and
 `layoutDirection`. Supply localized strings from your app. For Arabic UIKit
 screens, pass `layoutDirection: .rightToLeft`.
 
-The popup currently uses a fixed blue palette. The legacy `color` parameter is
-retained for compatibility but does not change the modern popup palette.
+The popup defaults to a blue palette. Set `backgroundColor` in UIKit
+configuration or a SwiftUI `ShowcaseStep` to customise its background; choose
+a dark colour to retain contrast with the light text and buttons. The legacy
+`color` parameter is retained for compatibility but does not style the popup.
+
+The dimmed overlay covers safe areas; popup placement still respects them.
+If even compact spacing cannot fit the popup beside its target, the entire
+popup scrolls, including progress and actions, instead of squeezing its text.
+
+## Demo app
+
+Open `Examples/ShowcaseDemo/ShowcaseDemo.xcodeproj` and run the `ShowcaseDemo`
+scheme. The unbranded FORM / STUDIO example uses a native SwiftUI `TabView`
+and the SwiftUI showcase API to highlight dashboard cards and the Projects
+tab. Tap **?** to replay,
+or add `--show-guide` to the scheme's launch arguments to start automatically.
+For a native SwiftUI `TabView`, use a zero-based tab index:
+
+```swift
+ShowcaseStep(
+    tabIndex: 1,
+    title: "Projects",
+    message: "Your projects, one tap away.",
+    nextTitle: "Done"
+)
+```
+
+Attach `.showcase` inside a tab's content so it can find the enclosing UIKit
+tab controller. The step uses the native tab item's actual frame and defaults
+to a circular highlight with ripple. It waits if the controller or item is
+unavailable; it never estimates tab positions. Do not attach `.showcaseTarget`
+to `tabItem` labels.
+
+To regenerate the project, run `ruby Examples/ShowcaseDemo/generate_project.rb`
+with the `xcodeproj` Ruby gem available.
 
 Completion reasons:
 
