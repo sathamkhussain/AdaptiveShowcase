@@ -21,7 +21,7 @@ assets are used.
 | <img src="Documentation/Images/duo-folded-landscape.png" alt="Folded Duo landscape with Projects tab highlighted" width="450"> | <img src="Documentation/Images/duo-unfolded-landscape.png" alt="Unfolded Duo landscape with Projects tab highlighted" width="450"> |
 
 The demo, SwiftUI `tabIndex` steps, `backgroundColor` option, and safe-area/
-overflow improvements shown here are currently on `main`, not in `0.1.0`.
+overflow improvements shown here are included in `0.2.0`.
 
 ## Installation
 
@@ -31,12 +31,12 @@ In Xcode, choose **File > Add Package Dependencies** and enter:
 https://github.com/sathamkhussain/AdaptiveShowcase.git
 ```
 
-Select version `0.1.0` or add this dependency to your package:
+Select version `0.2.0` or add this dependency to your package:
 
 ```swift
 .package(
     url: "https://github.com/sathamkhussain/AdaptiveShowcase.git",
-    from: "0.1.0"
+    from: "0.2.0"
 )
 ```
 
