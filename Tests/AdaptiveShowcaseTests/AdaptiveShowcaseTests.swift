@@ -2,6 +2,33 @@ import XCTest
 import SwiftUI
 import AdaptiveShowcase
 
+// Swift Package's hostless iOS runner has no window scene to drive modal transitions.
+// Drive appearance explicitly here; real system presentation also needs app-hosted validation.
+private final class PresentationTestTabController: UITabBarController {
+    private var presentation: UIViewController?
+
+    override var presentedViewController: UIViewController? { presentation }
+
+    override func present(_ controller: UIViewController, animated: Bool, completion: (() -> Void)? = nil) {
+        presentation = controller
+        controller.loadViewIfNeeded()
+        controller.view.frame = view.bounds
+        view.window?.addSubview(controller.view)
+        controller.beginAppearanceTransition(true, animated: false)
+        controller.endAppearanceTransition()
+        completion?()
+    }
+
+    override func dismiss(animated: Bool, completion: (() -> Void)? = nil) {
+        let controller = presentation
+        controller?.beginAppearanceTransition(false, animated: false)
+        controller?.view.removeFromSuperview()
+        controller?.endAppearanceTransition()
+        presentation = nil
+        completion?()
+    }
+}
+
 final class AdaptiveShowcaseTests: XCTestCase {
     @MainActor func testShortAdsDescriptionFitsWithoutScrollingAfterFoldResize() async {
         await checkShortAdsDescription(direction: .leftToRight)
@@ -93,12 +120,13 @@ final class AdaptiveShowcaseTests: XCTestCase {
     }
 
     @MainActor func testExternalDismissalCancelsOnceAndReleasesPresentation() async {
-        let tabs = UITabBarController()
+        let tabs = PresentationTestTabController()
         tabs.viewControllers = [UIViewController()]
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         window.rootViewController = tabs
-        window.isHidden = false
+        window.makeKeyAndVisible()
         defer { window.isHidden = true }
+        try? await Task.sleep(nanoseconds: 100_000_000)
         var dismissals: [ShowcaseOverlayView.Dismissal] = []
         var overlay: ShowcaseOverlayView? = ShowcaseOverlayView(
             configuration: .init(title: "Guide", message: "Details."),
@@ -111,11 +139,16 @@ final class AdaptiveShowcaseTests: XCTestCase {
             if overlay?.superview != nil { break }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
+        guard overlay?.superview != nil else {
+            XCTFail("Showcase presentation did not finish")
+            overlay?.dismiss(.cancelled)
+            return
+        }
         weak var releasedHost = tabs.presentedViewController
         XCTAssertNotNil(releasedHost)
-        await withCheckedContinuation { continuation in
-            tabs.dismiss(animated: false) { continuation.resume() }
-        }
+        let dismissed = expectation(description: "External presentation dismissal completes")
+        tabs.dismiss(animated: false) { dismissed.fulfill() }
+        await fulfillment(of: [dismissed], timeout: 5)
         XCTAssertEqual(dismissals, [.cancelled])
         XCTAssertNil(overlay?.superview)
         XCTAssertTrue(releasedHost?.children.isEmpty ?? true)
@@ -133,13 +166,14 @@ final class AdaptiveShowcaseTests: XCTestCase {
     @MainActor func testPresentationDoesNotAddTabOrNavigationEntries() async {
         let content = UIViewController()
         let navigation = UINavigationController(rootViewController: content)
-        let tabs = UITabBarController()
+        let tabs = PresentationTestTabController()
         let other = UIViewController()
         tabs.viewControllers = [navigation, other]
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 678, height: 466))
         window.rootViewController = tabs
-        window.isHidden = false
+        window.makeKeyAndVisible()
         defer { window.isHidden = true }
+        try? await Task.sleep(nanoseconds: 100_000_000)
         tabs.view.layoutIfNeeded()
         let originalChildren = tabs.children
         let originalItems = tabs.tabBar.items ?? []
@@ -162,7 +196,9 @@ final class AdaptiveShowcaseTests: XCTestCase {
         XCTAssertTrue(overlay.ownsPresentation(presentation))
         XCTAssertEqual(presentation?.children.count, 2)
         XCTAssertTrue(overlay.superview === presentation?.view)
-        overlay.dismiss(.cancelled)
+        let dismissed = expectation(description: "Owned presentation dismissal completes")
+        tabs.dismiss(animated: false) { dismissed.fulfill() }
+        await fulfillment(of: [dismissed], timeout: 5)
         for _ in 0..<100 {
             if tabs.presentedViewController == nil { break }
             try? await Task.sleep(nanoseconds: 20_000_000)

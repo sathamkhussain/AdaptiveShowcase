@@ -47,31 +47,36 @@ final class ShowcaseRegressionTests: XCTestCase {
             if let overlay = view as? ShowcaseOverlayView { return overlay }
             return view.subviews.lazy.compactMap { findOverlay(in: $0) }.first
         }
-        func waitUntil(_ condition: () -> Bool) async {
+        func containsShowcaseHost(_ controller: UIViewController) -> Bool {
+            controller is ShowcaseHostController || controller.children.contains { containsShowcaseHost($0) }
+        }
+        func waitUntil(_ phase: String, _ condition: () -> Bool) async {
             for _ in 0..<100 {
                 controller.view.layoutIfNeeded()
                 if condition() { return }
                 try? await Task.sleep(nanoseconds: 20_000_000)
             }
-            XCTFail("SwiftUI showcase did not reach the expected state")
+            XCTFail("SwiftUI showcase did not reach \(phase)")
         }
 
-        await waitUntil { findOverlay(in: controller.view) != nil }
+        await waitUntil("first target") { findOverlay(in: controller.view) != nil }
         let first = findOverlay(in: controller.view)
         first?.dismiss(.next)
-        await waitUntil { first?.superview == nil }
+        await waitUntil("first dismissal") { first?.superview == nil }
         XCTAssertTrue(state.isPresented)
         XCTAssertNil(findOverlay(in: controller.view))
 
         state.showsSecondTarget = true
-        await waitUntil { findOverlay(in: controller.view) != nil }
+        await waitUntil("second target") { findOverlay(in: controller.view) != nil }
         findOverlay(in: controller.view)?.dismiss(.next)
-        await waitUntil { !state.isPresented && findOverlay(in: controller.view) == nil }
+        await waitUntil("completion") {
+            !state.isPresented && !containsShowcaseHost(controller)
+        }
 
         state.isPresented = true
-        await waitUntil { findOverlay(in: controller.view) != nil }
+        await waitUntil("restart") { findOverlay(in: controller.view) != nil }
         findOverlay(in: controller.view)?.dismiss(.skipped)
-        await waitUntil { !state.isPresented && findOverlay(in: controller.view) == nil }
+        await waitUntil("skip") { !state.isPresented && !containsShowcaseHost(controller) }
     }
 
     @MainActor func testSwiftUIBridgeUpdatesTargetAndCleansUpWhenTargetDisappears() async {
@@ -394,29 +399,6 @@ final class ShowcaseRegressionTests: XCTestCase {
             UITabBarItem(title: "Tab \($0)", image: $0 == 2 ? image : nil, tag: $0)
         }
 
-        @MainActor func testBottomAlignedRailUsesActualIconsAfterResizing() {
-            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 720))
-            let bar = UITabBar(frame: CGRect(x: 382, y: 0, width: 84, height: 686))
-            bar.items = (0..<5).map { UITabBarItem(title: "Tab \($0)", image: nil, tag: $0) }
-            window.addSubview(bar)
-            bar.layoutIfNeeded()
-            for child in bar.subviews { child.isHidden = true }
-            let icons = (0..<5).map { _ in UIImageView(image: UIImage(systemName: "circle.fill")) }
-            for icon in icons { bar.addSubview(icon) }
-            for height: CGFloat in [686, 500, 686] {
-                bar.frame.size.height = height
-                for (index, icon) in icons.enumerated() {
-                    icon.frame = CGRect(x: 28, y: height - 280 + CGFloat(index) * 52,
-                                        width: 28, height: 28)
-                }
-                for index in icons.indices {
-                    XCTAssertEqual(
-                        ShowcaseOverlayView.tabItemRect(in: bar, at: index, convertedTo: window),
-                        icons[index].convert(icons[index].bounds, to: window)
-                    )
-                }
-            }
-        }
         window.addSubview(bar)
         bar.layoutIfNeeded()
         for child in bar.subviews { child.isHidden = true }
@@ -425,14 +407,44 @@ final class ShowcaseRegressionTests: XCTestCase {
         icon.frame = CGRect(x: 28, y: 300, width: 28, height: 28)
         container.addSubview(icon)
         bar.addSubview(container)
-        let rect = ShowcaseOverlayView.tabItemRect(in: bar, at: 2, convertedTo: window)
-        XCTAssertEqual(rect, icon.convert(icon.bounds, to: window))
-        XCTAssertEqual(rect?.midX, 424)
-        icon.frame.origin.y = 340
-        XCTAssertEqual(
-            ShowcaseOverlayView.tabItemRect(in: bar, at: 2, convertedTo: window),
-            icon.convert(icon.bounds, to: window)
-        )
+        for y: CGFloat in [300, 340] {
+            icon.frame.origin.y = y
+            let resolved = ShowcaseOverlayView.tabItemRect(in: bar, at: 2, convertedTo: window)
+            if #available(iOS 17.0, *), let frame = bar.items?[2].frame(in: window),
+               !frame.isEmpty, !frame.isInfinite, frame.intersects(window.bounds) {
+                XCTAssertEqual(resolved, frame)
+            } else {
+                XCTAssertEqual(resolved, icon.convert(icon.bounds, to: window))
+            }
+            XCTAssertEqual(resolved?.midX ?? -1, 424, accuracy: 0.01)
+        }
+    }
+
+    @MainActor func testBottomAlignedRailUsesActualGeometryAfterResizing() {
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 720))
+        let bar = UITabBar(frame: CGRect(x: 382, y: 0, width: 84, height: 686))
+        bar.items = (0..<5).map { UITabBarItem(title: "Tab \($0)", image: nil, tag: $0) }
+        window.addSubview(bar)
+        bar.layoutIfNeeded()
+        for child in bar.subviews { child.isHidden = true }
+        let icons = (0..<5).map { _ in UIImageView(image: UIImage(systemName: "circle.fill")) }
+        for icon in icons { bar.addSubview(icon) }
+        for height: CGFloat in [686, 500, 686] {
+            bar.frame.size.height = height
+            for (index, icon) in icons.enumerated() {
+                icon.frame = CGRect(x: 28, y: height - 280 + CGFloat(index) * 52,
+                                    width: 28, height: 28)
+            }
+            for index in icons.indices {
+                let resolved = ShowcaseOverlayView.tabItemRect(in: bar, at: index, convertedTo: window)
+                if #available(iOS 17.0, *), let frame = bar.items?[index].frame(in: window),
+                   !frame.isEmpty, !frame.isInfinite, frame.intersects(window.bounds) {
+                    XCTAssertEqual(resolved, frame)
+                } else {
+                    XCTAssertEqual(resolved, icons[index].convert(icons[index].bounds, to: window))
+                }
+            }
+        }
     }
 
 }
