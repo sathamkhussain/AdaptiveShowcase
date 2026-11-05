@@ -1,12 +1,228 @@
 import XCTest
-@testable import AdaptiveShowcase
+import SwiftUI
+import AdaptiveShowcase
 
 final class AdaptiveShowcaseTests: XCTestCase {
-    func testExample() throws {
-        // XCTest Documentation
-        // https://developer.apple.com/documentation/xctest
+    @MainActor func testShortAdsDescriptionFitsWithoutScrollingAfterFoldResize() async {
+        await checkShortAdsDescription(direction: .leftToRight)
+        await checkShortAdsDescription(direction: .rightToLeft)
+    }
 
-        // Defining Test Cases and Test Methods
-        // https://developer.apple.com/documentation/xctest/defining_test_cases_and_test_methods
+    @MainActor private func checkShortAdsDescription(direction: LayoutDirection) async {
+        let parent = UIViewController()
+        parent.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+        window.rootViewController = parent
+        window.isHidden = false
+        defer { window.isHidden = true }
+        func scrollViews(in view: UIView) -> [UIScrollView] {
+            (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        }
+        let overlay = ShowcaseOverlayView(
+            configuration: .init(title: direction == .rightToLeft ? "الإعلانات والعروض" : "Ads and promos",
+                                 message: direction == .rightToLeft
+                                     ? "تابع هذه المساحة، سنعرض لك هنا العروض المميزة."
+                                     : "Always watch this space, we'll show you the sweet stuff here.",
+                                 titleFont: .systemFont(ofSize: 20), messageFont: .systemFont(ofSize: 14),
+                                 nextTitle: "Done", step: 7, totalSteps: 7, layoutDirection: direction),
+            targetRect: { view in
+                CGRect(x: 0, y: 135, width: view.bounds.width - 84, height: 258)
+            }, completion: { _ in }
+        )
+        overlay.show(in: parent.view, parent: parent)
+        defer { overlay.dismiss(.cancelled) }
+        for size in [CGSize(width: 951, height: 669), CGSize(width: 466, height: 678)] {
+            window.frame.size = size
+            parent.view.frame = window.bounds
+            for _ in 0..<20 {
+                parent.view.layoutIfNeeded()
+                overlay.setNeedsLayout()
+                overlay.layoutIfNeeded()
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            let scroll = scrollViews(in: overlay).first
+            XCTAssertNotNil(scroll)
+            if let scroll = scroll {
+                XCTAssertLessThanOrEqual(scroll.contentSize.height, scroll.bounds.height + 1)
+            }
+        }
+    }
+
+    @MainActor func testConstrainedPanelKeepsFullTextInScrollableContent() async {
+        let parent = UIViewController()
+        parent.additionalSafeAreaInsets = UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 900, height: 678))
+        window.rootViewController = parent
+        window.isHidden = false
+        defer { window.isHidden = true }
+        func scrollViews(in view: UIView) -> [UIScrollView] {
+            (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        }
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            let message = direction == .rightToLeft
+                ? String(repeating: "اطّلع على العروض الترويجية والإعلانات المتاحة لك. ", count: 30)
+                : String(repeating: "Always watch this space for offers and promotions. ", count: 30)
+            let overlay = ShowcaseOverlayView(
+                configuration: .init(title: "Ads and promos", message: message,
+                                     layoutDirection: direction),
+                targetRect: { _ in CGRect(x: 0, y: 140, width: 800, height: 250) },
+                completion: { _ in }
+            )
+            overlay.show(in: parent.view, parent: parent)
+            for _ in 0..<20 {
+                parent.view.layoutIfNeeded()
+                overlay.layoutIfNeeded()
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            let scroll = scrollViews(in: overlay).first
+            XCTAssertNotNil(scroll)
+            if let scroll = scroll {
+                XCTAssertGreaterThan(scroll.bounds.height, 0)
+                XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
+                XCTAssertGreaterThan(scroll.contentSize.height, 300)
+            }
+            if #available(iOS 16.4, *) {
+                for child in parent.children {
+                    if let hosting = child as? UIHostingController<AnyView> {
+                        XCTAssertTrue(hosting.safeAreaRegions.isEmpty)
+                    }
+                }
+            }
+            overlay.dismiss(.cancelled)
+        }
+    }
+
+    @MainActor func testExternalDismissalCancelsOnceAndReleasesPresentation() async {
+        let tabs = UITabBarController()
+        tabs.viewControllers = [UIViewController()]
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = tabs
+        window.isHidden = false
+        defer { window.isHidden = true }
+        var dismissals: [ShowcaseOverlayView.Dismissal] = []
+        var overlay: ShowcaseOverlayView? = ShowcaseOverlayView(
+            configuration: .init(title: "Guide", message: "Details."),
+            targetRect: { _ in CGRect(x: 100, y: 100, width: 60, height: 60) },
+            completion: { dismissals.append($0) }
+        )
+        weak var releasedOverlay = overlay
+        overlay?.show(in: tabs.view, parent: tabs)
+        for _ in 0..<100 {
+            if overlay?.superview != nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        weak var releasedHost = tabs.presentedViewController
+        XCTAssertNotNil(releasedHost)
+        await withCheckedContinuation { continuation in
+            tabs.dismiss(animated: false) { continuation.resume() }
+        }
+        XCTAssertEqual(dismissals, [.cancelled])
+        XCTAssertNil(overlay?.superview)
+        XCTAssertTrue(releasedHost?.children.isEmpty ?? true)
+        overlay?.dismiss(.cancelled)
+        XCTAssertEqual(dismissals, [.cancelled])
+        overlay = nil
+        for _ in 0..<100 {
+            if releasedHost == nil && releasedOverlay == nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNil(releasedHost)
+        XCTAssertNil(releasedOverlay)
+    }
+
+    @MainActor func testPresentationDoesNotAddTabOrNavigationEntries() async {
+        let content = UIViewController()
+        let navigation = UINavigationController(rootViewController: content)
+        let tabs = UITabBarController()
+        let other = UIViewController()
+        tabs.viewControllers = [navigation, other]
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 678, height: 466))
+        window.rootViewController = tabs
+        window.isHidden = false
+        defer { window.isHidden = true }
+        tabs.view.layoutIfNeeded()
+        let originalChildren = tabs.children
+        let originalItems = tabs.tabBar.items ?? []
+        let overlay = ShowcaseOverlayView(
+            configuration: .init(title: "Parking", message: "Choose a category."),
+            targetRect: { _ in CGRect(x: 200, y: 40, width: 200, height: 80) },
+            completion: { _ in }
+        )
+        overlay.show(in: tabs.view, parent: tabs)
+        for _ in 0..<100 {
+            if overlay.superview != nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(tabs.children, originalChildren)
+        XCTAssertEqual(tabs.tabBar.items ?? [], originalItems)
+        XCTAssertEqual(navigation.viewControllers, [content])
+        XCTAssertTrue(content.children.isEmpty)
+        let presentation = tabs.presentedViewController
+        XCTAssertNotNil(presentation)
+        XCTAssertTrue(overlay.ownsPresentation(presentation))
+        XCTAssertEqual(presentation?.children.count, 2)
+        XCTAssertTrue(overlay.superview === presentation?.view)
+        overlay.dismiss(.cancelled)
+        for _ in 0..<100 {
+            if tabs.presentedViewController == nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertNil(tabs.presentedViewController)
+        XCTAssertTrue(presentation?.children.isEmpty == true)
+        XCTAssertTrue(content.children.isEmpty)
+        XCTAssertEqual(tabs.children, originalChildren)
+    }
+
+    @MainActor func testPublicOverlayTracksTargetAndCleansUpOnCancellation() {
+        let parent = UIViewController()
+        parent.view.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+        let target = UIView(frame: CGRect(x: 100, y: 100, width: 60, height: 60))
+        parent.view.addSubview(target)
+        var dismissals: [ShowcaseOverlayView.Dismissal] = []
+        var resolvedRect: CGRect?
+        let overlay = ShowcaseOverlayView(
+            configuration: .init(title: "Details", message: "View more information.",
+                                 layoutDirection: .rightToLeft),
+            targetRect: { view in
+                let rect = target.convert(target.bounds, to: view)
+                resolvedRect = rect
+                return rect
+            },
+            completion: { dismissals.append($0) }
+        )
+        overlay.show(in: parent.view, parent: parent)
+        for width: CGFloat in [390, 678] {
+            parent.view.frame.size.width = width
+            target.frame.origin.x = width - 100
+            parent.view.layoutIfNeeded()
+            overlay.setNeedsLayout()
+            overlay.layoutIfNeeded()
+            XCTAssertEqual(resolvedRect, target.frame)
+            XCTAssertEqual(overlay.bounds.width, width)
+        }
+        overlay.dismiss(.cancelled)
+        overlay.dismiss(.skipped)
+        XCTAssertEqual(dismissals, [.cancelled])
+        XCTAssertNil(overlay.superview)
+        XCTAssertTrue(parent.children.isEmpty)
+    }
+
+    @MainActor func testPublicTabResolverRejectsUnavailableItems() {
+        let tabBar = UITabBar()
+        XCTAssertNil(ShowcaseOverlayView.tabItemRect(in: tabBar, at: 0, convertedTo: UIView()))
+    }
+}
+
+private struct PublicShowcaseExample: View {
+    @State private var isPresented = false
+
+    var body: some View {
+        Button("Show details") { isPresented = true }
+            .showcaseTarget("details")
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .showcase(isPresented: $isPresented, steps: [
+                ShowcaseStep(target: "details", title: "Details",
+                             message: "View more information.", nextTitle: "Done")
+            ])
     }
 }
