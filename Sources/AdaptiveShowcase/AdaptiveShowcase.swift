@@ -23,6 +23,7 @@ private struct ShowcasePanel: View {
     let skip: () -> Void
     var measuresContent = false
     var compactLayout = false
+    var scrollsWholePanel = false
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .headline) private var titleScale = 1.0
     @ScaledMetric(relativeTo: .body) private var messageScale = 1.0
@@ -30,6 +31,24 @@ private struct ShowcasePanel: View {
     private let accent = Color(ShowcasePalette.accent)
 
     var body: some View {
+        Group {
+            if scrollsWholePanel {
+                ScrollView(.vertical) {
+                    panelContent
+                }
+            } else {
+                panelContent
+            }
+        }
+        .background(Color(configuration.backgroundColor ?? ShowcasePalette.background))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
+        }
+    }
+
+    private var panelContent: some View {
         VStack(alignment: .leading, spacing: compactLayout ? 8 : 20) {
             HStack {
                 HStack(spacing: 6) {
@@ -45,7 +64,7 @@ private struct ShowcasePanel: View {
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(Color(ShowcasePalette.text))
             }
-            if measuresContent {
+            if measuresContent || scrollsWholePanel {
                 textContent.fixedSize(horizontal: false, vertical: true)
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
@@ -64,12 +83,6 @@ private struct ShowcasePanel: View {
             }
         }
         .padding(compactLayout ? 12 : 24)
-        .background(Color(ShowcasePalette.background))
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(.white.opacity(0.16), lineWidth: 1)
-        }
     }
 
     private var textContent: some View {
@@ -94,7 +107,7 @@ private struct ShowcasePanel: View {
                 .padding(.horizontal, 24)
                 .frame(minHeight: 48)
                 .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil)
-                .foregroundStyle(Color(ShowcasePalette.background))
+                .foregroundStyle(Color(configuration.backgroundColor ?? ShowcasePalette.background))
                 .background(Color(ShowcasePalette.button), in: Capsule())
         }
         .buttonStyle(.plain)
@@ -155,6 +168,7 @@ public final class ShowcaseOverlayView: UIView {
         public var step: Int
         public var totalSteps: Int
         public var layoutDirection: LayoutDirection
+        public var backgroundColor: UIColor?
 
         public init(title: String, message: String, color: UIColor = .clear,
                     titleFont: UIFont = .systemFont(ofSize: 20),
@@ -163,7 +177,8 @@ public final class ShowcaseOverlayView: UIView {
                     highlightShape: HighlightShape = .roundedRectangle,
                     highlightPadding: CGFloat = 8, rippleEnabled: Bool = false,
                     step: Int = 1, totalSteps: Int = 1,
-                    layoutDirection: LayoutDirection = .leftToRight) {
+                    layoutDirection: LayoutDirection = .leftToRight,
+                    backgroundColor: UIColor? = nil) {
             self.title = title
             self.message = message
             self.color = color
@@ -177,6 +192,7 @@ public final class ShowcaseOverlayView: UIView {
             self.step = step
             self.totalSteps = totalSteps
             self.layoutDirection = layoutDirection
+            self.backgroundColor = backgroundColor
         }
     }
 
@@ -194,6 +210,7 @@ public final class ShowcaseOverlayView: UIView {
     private var panelController: UIHostingController<AnyView>?
     private var sizingController: UIHostingController<AnyView>?
     private var compactPanel = false
+    private var scrollsWholePanel = false
     private weak var presentationHost: ShowcasePresentationController?
 
     public func ownsPresentation(_ controller: UIViewController?) -> Bool {
@@ -413,8 +430,10 @@ public final class ShowcaseOverlayView: UIView {
                 in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height)
             ) ?? .zero
         }
-        if compactPanel != needsCompactPanel {
+        let needsWholePanelScroll = ceil(measuredSize.height) > region.height
+        if compactPanel != needsCompactPanel || scrollsWholePanel != needsWholePanelScroll {
             compactPanel = needsCompactPanel
+            scrollsWholePanel = needsWholePanelScroll
             panelController?.rootView = panelRoot(measuresContent: false, compact: compactPanel)
         }
         let height = min(region.height, ceil(measuredSize.height))
@@ -747,7 +766,8 @@ public final class ShowcaseOverlayView: UIView {
             self?.dismiss(.next)
         }, skip: { [weak self] in
             self?.dismiss(.skipped)
-        }, measuresContent: measuresContent, compactLayout: compact)
+        }, measuresContent: measuresContent, compactLayout: compact,
+            scrollsWholePanel: !measuresContent && scrollsWholePanel)
             .environment(\.layoutDirection, configuration.layoutDirection)
             .ignoresSafeArea())
     }
@@ -769,21 +789,36 @@ public final class ShowcaseOverlayView: UIView {
 
 public struct ShowcaseStep: Equatable {
     public let target: String
+    public private(set) var tabIndex: Int?
     public let title: String
     public let message: String
     public var nextTitle: String
     public var skipTitle: String
     public var highlightShape: ShowcaseOverlayView.HighlightShape
+    public var backgroundColor: UIColor?
 
     public init(target: String, title: String, message: String,
                 nextTitle: String = "Next", skipTitle: String = "Skip",
-                highlightShape: ShowcaseOverlayView.HighlightShape = .roundedRectangle) {
+                highlightShape: ShowcaseOverlayView.HighlightShape = .roundedRectangle,
+                backgroundColor: UIColor? = nil) {
         self.target = target
         self.title = title
         self.message = message
         self.nextTitle = nextTitle
         self.skipTitle = skipTitle
         self.highlightShape = highlightShape
+        self.backgroundColor = backgroundColor
+    }
+
+    /// Targets a zero-based item in the enclosing native TabView's UIKit tab controller.
+    public init(tabIndex: Int, title: String, message: String,
+                nextTitle: String = "Next", skipTitle: String = "Skip",
+                highlightShape: ShowcaseOverlayView.HighlightShape = .circle,
+                backgroundColor: UIColor? = nil) {
+        self.init(target: "", title: title, message: message,
+                  nextTitle: nextTitle, skipTitle: skipTitle,
+                  highlightShape: highlightShape, backgroundColor: backgroundColor)
+        self.tabIndex = tabIndex
     }
 }
 
@@ -844,9 +879,10 @@ private struct ShowcaseModifier: ViewModifier {
                             break
                         }
                     }
-                    .allowsHitTesting(rect != nil)
+                    .allowsHitTesting(rect != nil || step.tabIndex != nil)
                 }
             }
+            .ignoresSafeArea()
         }
         .onChange(of: isPresented) { presented in
             index = 0
@@ -920,7 +956,7 @@ final class ShowcaseHostController: UIViewController {
         self.target = target
         direction = layoutDirection
         self.completion = completion
-        if target == nil { cancel() }
+        if target == nil && step.tabIndex == nil { cancel() }
         view.setNeedsLayout()
     }
 
@@ -931,9 +967,16 @@ final class ShowcaseHostController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        guard view.window != nil, !view.bounds.isEmpty, let target = target,
-            !target.isEmpty, target.intersects(view.bounds), let step = step, !completedStep
+        guard view.window != nil, !view.bounds.isEmpty, let step = step, !completedStep
         else { return }
+        let tabController = tabBarController
+        if let index = step.tabIndex {
+            guard let tabController = tabController,
+                  ShowcaseOverlayView.tabItemRect(in: tabController.tabBar, at: index,
+                                                  convertedTo: tabController.view) != nil else { return }
+        } else {
+            guard let target = target, !target.isEmpty, target.intersects(view.bounds) else { return }
+        }
         if let overlay = overlay {
             overlay.setNeedsLayout()
             return
@@ -942,13 +985,19 @@ final class ShowcaseHostController: UIViewController {
             title: step.title, message: step.message, color: .clear,
             titleFont: .systemFont(ofSize: 20), messageFont: .systemFont(ofSize: 16),
             nextTitle: step.nextTitle, skipTitle: step.skipTitle,
-            highlightShape: step.highlightShape, step: index + 1, totalSteps: total,
-            layoutDirection: direction
+            highlightShape: step.highlightShape, rippleEnabled: step.tabIndex != nil,
+            step: index + 1, totalSteps: total,
+            layoutDirection: direction, backgroundColor: step.backgroundColor
         )
         let overlay = ShowcaseOverlayView(
             configuration: configuration,
             targetRect: { [weak self] overlay in
-                guard let self = self, let target = self.target else { return nil }
+                guard let self = self else { return nil }
+                if let index = self.step?.tabIndex, let tabController = self.tabBarController {
+                    return ShowcaseOverlayView.tabItemRect(
+                        in: tabController.tabBar, at: index, convertedTo: overlay)
+                }
+                guard let target = self.target else { return nil }
                 return self.view.convert(target, to: overlay)
             },
             completion: { [weak self] reason in
@@ -965,7 +1014,11 @@ final class ShowcaseHostController: UIViewController {
                 }
             })
         self.overlay = overlay
-        overlay.show(in: view, parent: self)
+        if step.tabIndex != nil, let tabController = tabController {
+            overlay.show(in: tabController.view, parent: tabController)
+        } else {
+            overlay.show(in: view, parent: self)
+        }
     }
 
     func cancel() {

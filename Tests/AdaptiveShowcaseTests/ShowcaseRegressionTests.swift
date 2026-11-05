@@ -34,6 +34,89 @@ private struct ShowcaseTestScreen: View {
 
 final class ShowcaseRegressionTests: XCTestCase {
 
+    @MainActor func testSwiftUIShadeCoversSafeAreaWhilePanelStaysInsideIt() async {
+        for insets in [
+            UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84),
+            UIEdgeInsets(top: 0, left: 84, bottom: 34, right: 0),
+            UIEdgeInsets(top: 47, left: 0, bottom: 34, right: 0)
+        ] {
+            let state = ShowcaseExampleState()
+            let controller = UIHostingController(rootView: ShowcaseTestScreen(state: state))
+            controller.additionalSafeAreaInsets = insets
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 844))
+            window.rootViewController = controller
+            window.isHidden = false
+            defer { window.isHidden = true }
+
+            func findOverlay(in view: UIView) -> ShowcaseOverlayView? {
+                if let overlay = view as? ShowcaseOverlayView { return overlay }
+                return view.subviews.lazy.compactMap { findOverlay(in: $0) }.first
+            }
+            for _ in 0..<100 {
+                controller.view.layoutIfNeeded()
+                if findOverlay(in: controller.view) != nil { break }
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+            guard let overlay = findOverlay(in: controller.view) else {
+                XCTFail("Missing SwiftUI overlay")
+                continue
+            }
+            overlay.layoutIfNeeded()
+            XCTAssertEqual(overlay.convert(overlay.bounds, to: controller.view), controller.view.bounds)
+            let shade = overlay.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.first
+            XCTAssertEqual(shade?.path?.boundingBoxOfPath, overlay.bounds)
+            for point in [CGPoint(x: controller.view.bounds.midX, y: 3),
+                          CGPoint(x: controller.view.bounds.maxX - 3, y: 400),
+                          CGPoint(x: 3, y: controller.view.bounds.maxY - 10)] {
+                let local = overlay.convert(point, from: controller.view)
+                XCTAssertEqual(shade?.path?.contains(local, using: .evenOdd), true,
+                               "Point \(local), mask \(String(describing: shade?.path))")
+            }
+            let panels = overlay.subviews.filter { !$0.isHidden && !$0.bounds.isEmpty && !($0 is UIButton) }
+            XCTAssertFalse(panels.isEmpty)
+            for panel in panels {
+                XCTAssertTrue(controller.view.safeAreaLayoutGuide.layoutFrame.contains(
+                    panel.convert(panel.bounds, to: controller.view)))
+            }
+            overlay.dismiss(.cancelled)
+        }
+    }
+
+    @MainActor func testLandscapeOverflowScrollsTextAndActionsTogether() async {
+        let parent = UIViewController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 678, height: 466))
+        window.rootViewController = parent
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let overlay = ShowcaseOverlayView(configuration: .init(
+            title: "A little focus. A big difference.",
+            message: "Keep your next great idea in sight. Pick up where you left off, with everything you need in one place.",
+            nextTitle: "Got it"
+        ), targetRect: { _ in
+            CGRect(x: 0, y: 140, width: 678, height: 230)
+        }, completion: { _ in })
+        overlay.show(in: parent.view, parent: parent)
+        defer { overlay.dismiss(.cancelled) }
+
+        func scrollViews(in view: UIView) -> [UIScrollView] {
+            (view as? UIScrollView).map { [$0] } ?? view.subviews.flatMap { scrollViews(in: $0) }
+        }
+        for _ in 0..<100 {
+            parent.view.layoutIfNeeded()
+            overlay.layoutIfNeeded()
+            if scrollViews(in: overlay).contains(where: { $0.contentSize.height > $0.bounds.height }) { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard let scroll = scrollViews(in: overlay).first else {
+            XCTFail("Missing overflow scroll view")
+            return
+        }
+        XCTAssertGreaterThan(scroll.bounds.height, 50)
+        XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
+        scroll.setContentOffset(CGPoint(x: 0, y: scroll.contentSize.height - scroll.bounds.height), animated: false)
+        XCTAssertGreaterThan(scroll.contentOffset.y, 0)
+    }
+
     @MainActor func testSwiftUIShowcaseAdvancesWaitsForTargetsAndRestarts() async {
         let state = ShowcaseExampleState()
         state.showsSecondTarget = false

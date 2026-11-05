@@ -29,7 +29,60 @@ private final class PresentationTestTabController: UITabBarController {
     }
 }
 
+private struct NativeTabGuideScreen: View {
+    @State private var showingGuide = true
+
+    var body: some View {
+        Color.white
+            .showcase(isPresented: $showingGuide, steps: [
+                ShowcaseStep(tabIndex: 1, title: "Projects", message: "Your projects live here.")
+            ])
+    }
+}
+
 final class AdaptiveShowcaseTests: XCTestCase {
+    @MainActor func testSwiftUINativeTabStepUsesActualFrameWithoutSelectingTab() async {
+        let tabController = PresentationTestTabController()
+        let home = UIHostingController(rootView: NativeTabGuideScreen())
+        home.tabBarItem = UITabBarItem(title: "Home", image: UIImage(systemName: "house"), tag: 0)
+        let projects = UIViewController()
+        projects.tabBarItem = UITabBarItem(title: "Projects", image: UIImage(systemName: "folder"), tag: 1)
+        tabController.viewControllers = [home, projects]
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 844))
+        window.rootViewController = tabController
+        window.isHidden = false
+        defer {
+            tabController.dismiss(animated: false)
+            window.isHidden = true
+        }
+        func findOverlay(in view: UIView) -> ShowcaseOverlayView? {
+            if let overlay = view as? ShowcaseOverlayView { return overlay }
+            return view.subviews.lazy.compactMap { findOverlay(in: $0) }.first
+        }
+        for _ in 0..<100 {
+            tabController.view.layoutIfNeeded()
+            home.view.layoutIfNeeded()
+            if findOverlay(in: window) != nil { break }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        guard let overlay = findOverlay(in: window),
+              let target = ShowcaseOverlayView.tabItemRect(in: tabController.tabBar, at: 1,
+                                                          convertedTo: overlay) else {
+            XCTFail("Native SwiftUI tab step did not resolve")
+            return
+        }
+        defer { overlay.dismiss(.cancelled) }
+        overlay.layoutIfNeeded()
+        let shade = overlay.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.first
+        XCTAssertEqual(shade?.path?.contains(CGPoint(x: target.midX, y: target.midY), using: .evenOdd), false)
+        let outsideHighlight = CGPoint(x: target.midX,
+                                       y: target.midY - max(target.width, target.height) / 2 - 20)
+        XCTAssertEqual(shade?.path?.contains(outsideHighlight, using: .evenOdd), true)
+        XCTAssertEqual(tabController.selectedIndex, 0)
+        XCTAssertNotNil(tabController.presentedViewController)
+        XCTAssertEqual(tabController.viewControllers?.count, 2)
+    }
+
     @MainActor func testShortAdsDescriptionFitsWithoutScrollingAfterFoldResize() async {
         await checkShortAdsDescription(direction: .leftToRight)
         await checkShortAdsDescription(direction: .rightToLeft)
