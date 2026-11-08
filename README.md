@@ -183,6 +183,13 @@ with the `xcodeproj` Ruby gem available.
 
 ### Custom body content
 
+The demo's Projects step includes a custom folder label and project preview,
+with library-managed progress and Skip/Done controls:
+
+| Duo portrait | Duo landscape |
+|---|---|
+| <img src="Documentation/Images/custom-content-duo-portrait.png" alt="Custom showcase body with a folder label and project preview beside the Duo portrait tab rail" width="300"> | <img src="Documentation/Images/custom-content-duo-landscape.png" alt="Custom showcase body with a folder label and project preview beside the Duo landscape tab rail" width="450"> |
+
 Pass a SwiftUI view builder to replace the title and message for each step:
 
 ```swift
