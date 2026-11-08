@@ -24,6 +24,7 @@ The demo, SwiftUI `tabIndex` steps, `backgroundColor` option, and safe-area/
 overflow improvements shown here are included in `0.2.0`.
 Version `0.2.1` improves guide tracking during rotation and resizing, resolves
 relocated native tab items, and enables automatic signing for the demo app.
+Version `0.3.0` adds custom SwiftUI body content for both SwiftUI and UIKit callers.
 
 ## Installation
 
@@ -33,12 +34,12 @@ In Xcode, choose **File > Add Package Dependencies** and enter:
 https://github.com/sathamkhussain/AdaptiveShowcase.git
 ```
 
-Select version `0.2.1` or add this dependency to your package:
+Select version `0.3.0` or add this dependency to your package:
 
 ```swift
 .package(
     url: "https://github.com/sathamkhussain/AdaptiveShowcase.git",
-    from: "0.2.1"
+    from: "0.3.0"
 )
 ```
 
@@ -157,7 +158,8 @@ popup scrolls, including progress and actions, instead of squeezing its text.
 Open `Examples/ShowcaseDemo/ShowcaseDemo.xcodeproj` and run the `ShowcaseDemo`
 scheme. The unbranded FORM / STUDIO example uses a native SwiftUI `TabView`
 and the SwiftUI showcase API to highlight dashboard cards and the Projects
-tab. Tap **?** to replay,
+tab. The guide uses custom labels and a project preview in the tab step.
+Tap **?** to replay,
 or add `--show-guide` to the scheme's launch arguments to start automatically.
 For a native SwiftUI `TabView`, use a zero-based tab index:
 
@@ -178,6 +180,56 @@ to `tabItem` labels.
 
 To regenerate the project, run `ruby Examples/ShowcaseDemo/generate_project.rb`
 with the `xcodeproj` Ruby gem available.
+
+### Custom body content
+
+Pass a SwiftUI view builder to replace the title and message for each step:
+
+```swift
+.showcase(isPresented: $showGuide, steps: steps) { step in
+    VStack(alignment: .leading, spacing: 12) {
+        Label("Discover", systemImage: "sparkles")
+        Text(step.title).font(.headline).accessibilityAddTraits(.isHeader)
+        Text(step.message)
+        if step.tabIndex != nil {
+            Label("Your saved projects", systemImage: "folder")
+        }
+    }
+    .foregroundStyle(.white)
+}
+```
+
+For UIKit, use the same SwiftUI content through the overlay initializer:
+
+```swift
+let overlay = ShowcaseOverlayView(
+    configuration: .init(title: "Projects", message: "Your saved work."),
+    targetRect: { targetView.convert(targetView.bounds, to: $0) },
+    completion: { _ in }
+) {
+    VStack(alignment: .leading, spacing: 12) {
+        Image(systemName: "folder.fill")
+        Text("Your projects").font(.headline)
+        Text("Everything you need, in one place.")
+    }
+    .foregroundStyle(.white)
+}
+```
+
+Progress, Next/Skip buttons, background styling, spotlight and connector remain
+library-managed. Existing title/message-only calls are unchanged, and steps
+remain `Equatable`. Custom content updates without restarting the current step.
+
+Use content-sized views rather than unbounded `GeometryReader`s or expanding
+`Spacer`s. The body is measured and scrolls when space is limited; changes to its
+natural height trigger remeasurement. Content may also be instantiated for
+off-screen measurement, so keep view construction free of side effects and
+share model state when needed. Wrap UIKit views with `UIViewRepresentable`,
+creating a separate view instance in each `makeUIView` call.
+
+Custom content inherits layout direction (including Arabic RTL) and supports
+the existing adaptive layout on iOS 15+, iPhones, Duo and iPads. Use leading/
+trailing alignment, scalable fonts and accessible labels in your own content.
 
 Completion reasons:
 
@@ -243,7 +295,10 @@ and shape, not all UIKit styling options.
 
 Geometry uses container bounds and actual target positions, not physical screen
 size estimates. The popup respects the host's safe area, reduces padding and gaps
-when space is limited, and scrolls text when required. Dynamic Type, Reduce Motion,
+when space is limited, and scrolls text when required. Side-rail targets can use
+full-height space beside the rail even on compact-width devices; the popup grows
+to its natural content height, capped by the chosen safe-area placement region.
+Dynamic Type, Reduce Motion,
 and accessibility escape are supported. Extremely small placement regions may
 not accommodate a usable panel; avoid targeting an entire screen-sized region.
 
