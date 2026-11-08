@@ -1,10 +1,27 @@
 # AdaptiveShowcase
 
-An iOS spotlight tutorial library for UIKit and SwiftUI, with a dimmed background,
-target highlight, connector, and content-sized popup.
+Guide users to the right place in your iOS app with spotlight tutorials for
+UIKit and SwiftUI.
 
-Requires iOS 15+ and Swift tools 5.9+. No third-party dependencies.
+AdaptiveShowcase combines a dimmed background, target highlight, connector, and
+content-sized popup without third-party dependencies.
+
+- **Custom content:** use the default title/message or supply your own SwiftUI
+  body, while the library manages progress and Next/Skip controls.
+- **Native tab guides:** highlight actual tab items without guessing positions
+  or changing the selected tab.
+- **Adaptive placement:** fit the popup around targets and safe areas, with
+  scrolling when content exceeds the available space.
+- **iPhone Duo support:** adapt to folded/unfolded and portrait/landscape
+  layouts, track relocated tab rails, and support mirrored RTL placement.
+- **Accessibility and RTL:** support Dynamic Type, Reduce Motion, accessibility
+  escape, and right-to-left layout direction.
+
+Requires iOS 15+ and Swift tools 5.9+.
 Initial releases are pre-1.0; the API may change between minor versions.
+
+[Install](#installation) | [UIKit](#uikit) | [SwiftUI](#swiftui) |
+[Custom content](#custom-body-content) | [Run the demo](#demo-app)
 
 ## iPhone Duo gallery
 
