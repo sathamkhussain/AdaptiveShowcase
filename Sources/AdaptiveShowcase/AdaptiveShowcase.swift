@@ -17,6 +17,14 @@ private enum ShowcasePalette {
     static let inactive = UIColor(red: 96 / 255, green: 125 / 255, blue: 148 / 255, alpha: 1)
 }
 
+private struct ShowcaseContentSizePreference: PreferenceKey {
+    static var defaultValue = CGSize.zero
+
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
 private struct ShowcasePanel: View {
     let configuration: ShowcaseOverlayView.Configuration
     let next: () -> Void
@@ -24,6 +32,9 @@ private struct ShowcasePanel: View {
     var measuresContent = false
     var compactLayout = false
     var scrollsWholePanel = false
+    var customContent: AnyView?
+    var measuredContentHeight: CGFloat?
+    var onContentSizeChange: ((CGSize) -> Void)?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .headline) private var titleScale = 1.0
     @ScaledMetric(relativeTo: .body) private var messageScale = 1.0
@@ -86,6 +97,32 @@ private struct ShowcasePanel: View {
     }
 
     private var textContent: some View {
+        Group {
+            if let customContent {
+                if let measuredContentHeight {
+                    Color.clear.frame(height: measuredContentHeight)
+                } else {
+                    customContent
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background {
+                            GeometryReader { geometry in
+                                Color.clear.preference(key: ShowcaseContentSizePreference.self,
+                                                       value: geometry.size)
+                            }
+                        }
+                        .onPreferenceChange(ShowcaseContentSizePreference.self) { size in
+                            onContentSizeChange?(size)
+                        }
+                }
+            } else {
+                defaultTextContent
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .multilineTextAlignment(.leading)
+    }
+
+    private var defaultTextContent: some View {
         VStack(alignment: .leading, spacing: compactLayout ? 8 : 16) {
             Text(configuration.title)
                 .font(Font(configuration.titleFont.withSize(configuration.titleFont.pointSize * titleScale)).weight(.semibold))
@@ -225,16 +262,34 @@ public final class ShowcaseOverlayView: UIView {
     private var layoutTimer: Timer?
     private var lastTargetRect: CGRect?
     private var isChangingLayout = false
+    private var customContent: AnyView?
+    private var customContentHeights: [CGFloat: CGFloat] = [:]
 
     public func ownsPresentation(_ controller: UIViewController?) -> Bool {
         guard let controller = controller else { return false }
         return controller === presentationHost
     }
 
-    public init(configuration: Configuration, targetRect: @escaping (UIView) -> CGRect?,
-         completion: @escaping (Dismissal) -> Void) {
+    public convenience init(configuration: Configuration, targetRect: @escaping (UIView) -> CGRect?,
+                            completion: @escaping (Dismissal) -> Void) {
+        self.init(configuration: configuration, targetRect: targetRect,
+                  customContent: nil, completion: completion)
+    }
+
+    /// Replaces the title and message while retaining progress, actions, and adaptive sizing.
+    public convenience init<Content: View>(
+        configuration: Configuration, targetRect: @escaping (UIView) -> CGRect?,
+        completion: @escaping (Dismissal) -> Void, @ViewBuilder content: () -> Content
+    ) {
+        self.init(configuration: configuration, targetRect: targetRect,
+                  customContent: AnyView(content()), completion: completion)
+    }
+
+    init(configuration: Configuration, targetRect: @escaping (UIView) -> CGRect?,
+         customContent: AnyView?, completion: @escaping (Dismissal) -> Void) {
         self.configuration = configuration
         self.targetRect = targetRect
+        self.customContent = customContent
         self.completion = completion
         super.init(frame: .zero)
         configureViews()
@@ -452,13 +507,13 @@ public final class ShowcaseOverlayView: UIView {
             return
         }
         card.isHidden = false
-        sizingController?.rootView = panelRoot(measuresContent: true, compact: false)
+        sizingController?.rootView = panelRoot(measuresContent: true, compact: false, width: width)
         var measuredSize = sizingController?.sizeThatFits(
             in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height)
         ) ?? .zero
         let needsCompactPanel = ceil(measuredSize.height) > region.height
         if needsCompactPanel {
-            sizingController?.rootView = panelRoot(measuresContent: true, compact: true)
+            sizingController?.rootView = panelRoot(measuresContent: true, compact: true, width: width)
             measuredSize = sizingController?.sizeThatFits(
                 in: CGSize(width: width, height: UIView.layoutFittingExpandedSize.height)
             ) ?? .zero
@@ -561,23 +616,19 @@ public final class ShowcaseOverlayView: UIView {
     static func contentRegion(in safeRect: CGRect, avoiding target: CGRect,
                               regularWidth: Bool) -> CGRect {
         let gap: CGFloat = 16
-        var regions = [
+        let regions = [
             CGRect(x: safeRect.minX, y: safeRect.minY, width: safeRect.width,
                    height: max(0, min(safeRect.maxY, target.minY - gap) - safeRect.minY)),
             CGRect(x: safeRect.minX, y: max(safeRect.minY, target.maxY + gap),
                    width: safeRect.width,
-                   height: max(0, safeRect.maxY - max(safeRect.minY, target.maxY + gap)))
+                   height: max(0, safeRect.maxY - max(safeRect.minY, target.maxY + gap))),
+            CGRect(x: safeRect.minX, y: safeRect.minY,
+                   width: max(0, min(safeRect.maxX, target.minX - gap) - safeRect.minX),
+                   height: safeRect.height),
+            CGRect(x: max(safeRect.minX, target.maxX + gap), y: safeRect.minY,
+                   width: max(0, safeRect.maxX - max(safeRect.minX, target.maxX + gap)),
+                   height: safeRect.height)
         ]
-        if regularWidth {
-            regions += [
-                CGRect(x: safeRect.minX, y: safeRect.minY,
-                       width: max(0, min(safeRect.maxX, target.minX - gap) - safeRect.minX),
-                       height: safeRect.height),
-                CGRect(x: max(safeRect.minX, target.maxX + gap), y: safeRect.minY,
-                       width: max(0, safeRect.maxX - max(safeRect.minX, target.maxX + gap)),
-                       height: safeRect.height)
-            ]
-        }
         return regions.max {
             min($0.width, regularWidth ? 480 : 360) * $0.height <
                 min($1.width, regularWidth ? 480 : 360) * $1.height
@@ -834,13 +885,32 @@ public final class ShowcaseOverlayView: UIView {
                                                name: UIAccessibility.reduceMotionStatusDidChangeNotification, object: nil)
     }
 
-    private func panelRoot(measuresContent: Bool, compact: Bool) -> AnyView {
-        AnyView(ShowcasePanel(configuration: configuration, next: { [weak self] in
+    func updateCustomContent(_ content: AnyView?) {
+        guard customContent != nil || content != nil else { return }
+        customContent = content
+        customContentHeights.removeAll()
+        panelController?.rootView = panelRoot(measuresContent: false, compact: compactPanel)
+        setNeedsLayout()
+    }
+
+    private func panelRoot(measuresContent: Bool, compact: Bool, width: CGFloat? = nil) -> AnyView {
+        let contentWidth = width.map { $0 - (compact ? 24 : 48) }
+        let measuredHeight = measuresContent ? contentWidth.flatMap { customContentHeights[$0] } : nil
+        return AnyView(ShowcasePanel(configuration: configuration, next: { [weak self] in
             self?.dismiss(.next)
         }, skip: { [weak self] in
             self?.dismiss(.skipped)
         }, measuresContent: measuresContent, compactLayout: compact,
-            scrollsWholePanel: !measuresContent && scrollsWholePanel)
+            scrollsWholePanel: !measuresContent && scrollsWholePanel,
+            customContent: customContent, measuredContentHeight: measuredHeight,
+            onContentSizeChange: measuresContent ? nil : { [weak self] size in
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.completion != nil, size.width > 0, size.height > 0,
+                          self.customContentHeights[size.width] != size.height else { return }
+                    self.customContentHeights[size.width] = size.height
+                    self.setNeedsLayout()
+                }
+            })
             .environment(\.layoutDirection, configuration.layoutDirection)
             .ignoresSafeArea())
     }
@@ -916,11 +986,21 @@ extension View {
     public func showcase(isPresented: Binding<Bool>, steps: [ShowcaseStep]) -> some View {
         modifier(ShowcaseModifier(isPresented: isPresented, steps: steps))
     }
+
+    /// Supplies custom body content for each step without replacing progress or navigation.
+    public func showcase<Content: View>(
+        isPresented: Binding<Bool>, steps: [ShowcaseStep],
+        @ViewBuilder content: @escaping (ShowcaseStep) -> Content
+    ) -> some View {
+        modifier(ShowcaseModifier(isPresented: isPresented, steps: steps,
+                                 customContent: { AnyView(content($0)) }))
+    }
 }
 
 private struct ShowcaseModifier: ViewModifier {
     @Binding var isPresented: Bool
     let steps: [ShowcaseStep]
+    var customContent: ((ShowcaseStep) -> AnyView)?
     @State private var index = 0
     @State private var generation = UUID()
     @Environment(\.layoutDirection) private var layoutDirection
@@ -936,7 +1016,8 @@ private struct ShowcaseModifier: ViewModifier {
                     let currentGeneration = generation
                     ShowcaseHost(
                         step: step, index: index, total: steps.count,
-                        target: rect, layoutDirection: layoutDirection
+                        target: rect, layoutDirection: layoutDirection,
+                        customContent: customContent?(step)
                     ) { reason in
                         guard isPresented, generation == currentGeneration else { return }
                         switch reason {
@@ -979,6 +1060,7 @@ private struct ShowcaseHost: UIViewControllerRepresentable {
     let total: Int
     let target: CGRect?
     let layoutDirection: LayoutDirection
+    var customContent: AnyView?
     let completion: (ShowcaseOverlayView.Dismissal) -> Void
 
     func makeUIViewController(context: Context) -> ShowcaseHostController {
@@ -988,7 +1070,7 @@ private struct ShowcaseHost: UIViewControllerRepresentable {
     func updateUIViewController(_ controller: ShowcaseHostController, context: Context) {
         controller.update(
             step: step, index: index, total: total, target: target,
-            layoutDirection: layoutDirection, completion: completion)
+            layoutDirection: layoutDirection, customContent: customContent, completion: completion)
     }
 
     static func dismantleUIViewController(_ controller: ShowcaseHostController, coordinator: ()) {
@@ -1006,6 +1088,7 @@ final class ShowcaseHostController: UIViewController {
     private var overlay: ShowcaseOverlayView?
     private var completedStep = false
     private var completionGeneration = UUID()
+    private var customContent: AnyView?
 
     override func loadView() {
         view = UIView()
@@ -1015,6 +1098,7 @@ final class ShowcaseHostController: UIViewController {
     func update(
         step: ShowcaseStep, index: Int, total: Int, target: CGRect?,
         layoutDirection: LayoutDirection,
+        customContent: AnyView? = nil,
         completion: @escaping (ShowcaseOverlayView.Dismissal) -> Void
     ) {
         if self.step != step || self.index != index || self.total != total
@@ -1027,6 +1111,8 @@ final class ShowcaseHostController: UIViewController {
         self.index = index
         self.total = total
         self.target = target
+        self.customContent = customContent
+        overlay?.updateCustomContent(customContent)
         direction = layoutDirection
         self.completion = completion
         if target == nil && step.tabIndex == nil { cancel() }
@@ -1073,6 +1159,7 @@ final class ShowcaseHostController: UIViewController {
                 guard let target = self.target else { return nil }
                 return self.view.convert(target, to: overlay)
             },
+            customContent: customContent,
             completion: { [weak self] reason in
                 guard let self = self else { return }
                 self.overlay = nil

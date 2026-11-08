@@ -6,6 +6,19 @@ import SwiftUI
 private final class ShowcaseExampleState: ObservableObject {
     @Published var isPresented = true
     @Published var showsSecondTarget = true
+    @Published var contentHeight: CGFloat = 60
+}
+
+private struct ShowcaseCustomTestContent: View {
+    @ObservedObject var state: ShowcaseExampleState
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        Text(layoutDirection == .rightToLeft ? "Custom RTL body" : "Custom LTR body")
+            .frame(maxWidth: .infinity)
+            .frame(height: state.contentHeight)
+            .accessibilityIdentifier("showcase.custom")
+    }
 }
 
 private struct ShowcaseTestScreen: View {
@@ -33,6 +46,97 @@ private struct ShowcaseTestScreen: View {
 }
 
 final class ShowcaseRegressionTests: XCTestCase {
+
+    @MainActor func testCustomBodyRemeasuresModelChangesAndFitsResizedHostsInBothDirections() async {
+        for direction in [LayoutDirection.leftToRight, .rightToLeft] {
+            let parent = UIViewController()
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            window.rootViewController = parent
+            window.isHidden = false
+            defer { window.isHidden = true }
+            parent.view.layoutIfNeeded()
+            let state = ShowcaseExampleState()
+            let overlay = ShowcaseOverlayView(
+                configuration: .init(title: String(repeating: "Unused title ", count: 100),
+                                     message: String(repeating: "Unused message ", count: 100),
+                                     layoutDirection: direction),
+                targetRect: { CGRect(x: $0.bounds.midX - 30, y: $0.bounds.maxY - 80,
+                                     width: 60, height: 50) },
+                completion: { _ in }
+            ) {
+                ShowcaseCustomTestContent(state: state)
+            }
+            overlay.show(in: parent.view, parent: parent)
+            defer { overlay.dismiss(.cancelled) }
+            func settle() async {
+                for _ in 0..<20 {
+                    parent.view.layoutIfNeeded()
+                    overlay.layoutIfNeeded()
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+            }
+            await settle()
+            guard let panel = parent.children.first?.view else {
+                XCTFail("Missing custom body panel")
+                continue
+            }
+            let shortHeight = panel.bounds.height
+            XCTAssertGreaterThan(shortHeight, 60)
+            XCTAssertLessThan(shortHeight, 340, "Default title and message must be replaced")
+            state.contentHeight = 240
+            await settle()
+            XCTAssertGreaterThan(panel.bounds.height, shortHeight + 100)
+            state.contentHeight = 60
+            await settle()
+            XCTAssertEqual(panel.bounds.height, shortHeight, accuracy: 2)
+            for size in [CGSize(width: 678, height: 466), CGSize(width: 951, height: 669)] {
+                window.frame.size = size
+                parent.view.frame = window.bounds
+                state.contentHeight = 1200
+                await settle()
+                let frame = panel.convert(panel.bounds, to: overlay)
+                XCTAssertTrue(overlay.safeAreaLayoutGuide.layoutFrame.contains(frame))
+                XCTAssertLessThan(panel.bounds.height, state.contentHeight)
+            }
+        }
+    }
+
+    @MainActor func testCustomBodyBridgeUpdatesWithoutRestartingCurrentStep() async {
+        let controller = ShowcaseHostController()
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true; controller.cancel() }
+        let step = ShowcaseStep(target: "custom", title: "Default", message: "Default body")
+        var completions: [ShowcaseOverlayView.Dismissal] = []
+        let advanced = expectation(description: "Custom step advances after dismissal")
+        func update(height: CGFloat) {
+            controller.update(
+                step: step, index: 0, total: 1,
+                target: CGRect(x: 160, y: 760, width: 60, height: 50),
+                layoutDirection: .rightToLeft,
+                customContent: AnyView(Text("Custom body").frame(height: height)),
+                completion: {
+                    completions.append($0)
+                    if $0 == .next { advanced.fulfill() }
+                })
+            controller.view.layoutIfNeeded()
+        }
+        update(height: 60)
+        guard let overlay = controller.view.subviews.compactMap({ $0 as? ShowcaseOverlayView }).first else {
+            XCTFail("Missing custom body bridge overlay")
+            return
+        }
+        let shortHeight = controller.children.first?.view.bounds.height ?? 0
+        update(height: 240)
+        overlay.layoutIfNeeded()
+        XCTAssertTrue(controller.view.subviews.contains { $0 === overlay })
+        XCTAssertGreaterThan(controller.children.first?.view.bounds.height ?? 0, shortHeight)
+        XCTAssertTrue(completions.isEmpty)
+        overlay.dismiss(.next)
+        await fulfillment(of: [advanced], timeout: 2)
+        XCTAssertEqual(completions, [.next])
+    }
 
     @MainActor func testSwiftUITabViewKeepsContentGuideThroughResizeAndRTL() async {
         let state = ShowcaseExampleState()
@@ -350,6 +454,23 @@ final class ShowcaseRegressionTests: XCTestCase {
         XCTAssertLessThan(short, 340)
         XCTAssertGreaterThan(long, short)
         XCTAssertLessThanOrEqual(overflowing, 720)
+    }
+
+    func testCompactSideRailUsesFullHeightPlacementInBothDirections() {
+        let safeRect = CGRect(x: 16, y: 16, width: 646, height: 434)
+        for target in [CGRect(x: 600, y: 240, width: 60, height: 60),
+                       CGRect(x: 18, y: 240, width: 60, height: 60)] {
+            let region = ShowcaseOverlayView.contentRegion(
+                in: safeRect, avoiding: target, regularWidth: false)
+            XCTAssertEqual(region.height, safeRect.height)
+            XCTAssertGreaterThanOrEqual(region.width, 360)
+            XCTAssertTrue(safeRect.contains(region))
+            XCTAssertFalse(region.intersects(target))
+            let panel = ShowcaseOverlayView.panelFrame(
+                in: region, size: CGSize(width: 360, height: 340), following: target)
+            XCTAssertEqual(panel.height, 340)
+            XCTAssertTrue(region.contains(panel))
+        }
     }
 
     func testShowcasePanelFollowsTabsAndStaysInsidePlacementRegion() {
