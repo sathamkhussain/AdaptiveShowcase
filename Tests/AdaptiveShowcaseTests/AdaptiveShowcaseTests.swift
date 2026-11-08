@@ -75,8 +75,9 @@ final class AdaptiveShowcaseTests: XCTestCase {
         overlay.layoutIfNeeded()
         let shade = overlay.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.first
         XCTAssertEqual(shade?.path?.contains(CGPoint(x: target.midX, y: target.midY), using: .evenOdd), false)
-        let outsideHighlight = CGPoint(x: target.midX,
-                                       y: target.midY - max(target.width, target.height) / 2 - 20)
+        let radius = max(target.width, target.height) / 2 + 20
+        let outsideHighlight = CGPoint(x: target.midX, y: target.midY - radius >= 0
+                                       ? target.midY - radius : target.midY + radius)
         XCTAssertEqual(shade?.path?.contains(outsideHighlight, using: .evenOdd), true)
         XCTAssertEqual(tabController.selectedIndex, 0)
         XCTAssertNotNil(tabController.presentedViewController)

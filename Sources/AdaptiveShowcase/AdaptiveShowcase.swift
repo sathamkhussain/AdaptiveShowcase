@@ -126,7 +126,17 @@ private struct ShowcasePanel: View {
 
 private final class ShowcasePresentationController: UIViewController {
     var onDismiss: (() -> Void)?
+    var onLayoutTransition: ((Bool) -> Void)?
     private var dismissing = false
+
+    override func viewWillTransition(to size: CGSize, with coordinator: UIViewControllerTransitionCoordinator) {
+        onLayoutTransition?(true)
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            self?.view.layoutIfNeeded()
+            self?.onLayoutTransition?(false)
+        }
+    }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
@@ -212,6 +222,9 @@ public final class ShowcaseOverlayView: UIView {
     private var compactPanel = false
     private var scrollsWholePanel = false
     private weak var presentationHost: ShowcasePresentationController?
+    private var layoutTimer: Timer?
+    private var lastTargetRect: CGRect?
+    private var isChangingLayout = false
 
     public func ownsPresentation(_ controller: UIViewController?) -> Bool {
         guard let controller = controller else { return false }
@@ -237,6 +250,10 @@ public final class ShowcaseOverlayView: UIView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    deinit {
+        layoutTimer?.invalidate()
+    }
+
     public func show(in host: UIView, parent: UIViewController? = nil) {
         guard superview == nil, completion != nil else { return }
         if parent is UITabBarController || parent is UINavigationController {
@@ -251,6 +268,12 @@ public final class ShowcaseOverlayView: UIView {
             controller.view.backgroundColor = .clear
             controller.onDismiss = { [weak self] in
                 self?.finishDismissal(.cancelled, dismissPresentation: false)
+            }
+            controller.onLayoutTransition = { [weak self] changing in
+                guard let self else { return }
+                self.isChangingLayout = changing
+                self.isHidden = changing
+                if !changing { self.setNeedsLayout() }
             }
             presentationHost = controller
             parent.present(controller, animated: false) { [weak self, weak controller] in
@@ -283,6 +306,14 @@ public final class ShowcaseOverlayView: UIView {
             bottomAnchor.constraint(equalTo: host.bottomAnchor)
         ])
         host.layoutIfNeeded()
+        layoutTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            guard let self, self.completion != nil, !self.isChangingLayout else { return }
+            let rect = self.targetRect(self)
+            if rect != self.lastTargetRect {
+                self.lastTargetRect = rect
+                self.setNeedsLayout()
+            }
+        }
         if !UIAccessibility.isReduceMotionEnabled {
             card.alpha = 0
             card.transform = CGAffineTransform(translationX: 0, y: 12)
@@ -324,6 +355,8 @@ public final class ShowcaseOverlayView: UIView {
 
     private func finishDismissal(_ reason: Dismissal, dismissPresentation: Bool = true) {
         guard let completion = completion else { return }
+        layoutTimer?.invalidate()
+        layoutTimer = nil
         self.completion = nil
         layer.removeAllAnimations()
         ripple.removeAllAnimations()
@@ -367,7 +400,7 @@ public final class ShowcaseOverlayView: UIView {
 
     public override func layoutSubviews() {
         super.layoutSubviews()
-        guard completion != nil, !bounds.isEmpty else { return }
+        guard completion != nil, !bounds.isEmpty, !isChangingLayout else { return }
         if bounds != previousBounds {
             card.layer.removeAllAnimations()
             card.transform = .identity
@@ -553,7 +586,15 @@ public final class ShowcaseOverlayView: UIView {
 
     public static func tabItemRect(in tabBar: UITabBar, at index: Int, convertedTo overlay: UIView) -> CGRect? {
         guard let items = tabBar.items, items.indices.contains(index),
-              tabBar.window != nil, !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
+              let window = (overlay as? UIWindow) ?? overlay.window,
+              tabBar.window == nil || tabBar.window === window else { return nil }
+        if let controller = tabController(containing: tabBar, in: window.rootViewController),
+           let title = items[index].accessibilityLabel ?? items[index].title,
+           let control = visibleTabItem(titled: title, in: controller.view,
+                                        excluding: controller.selectedViewController?.view) {
+            return control.convert(control.bounds, to: overlay)
+        }
+        guard tabBar.window === window, !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
         if #available(iOS 17.0, *) {
             if let frame = items[index].frame(in: overlay),
                !frame.isNull, !frame.isInfinite, !frame.isEmpty,
@@ -611,6 +652,38 @@ public final class ShowcaseOverlayView: UIView {
         }
         let control = ordered[index]
         return control.convert(control.bounds, to: overlay)
+    }
+
+    private static func tabController(containing bar: UITabBar, in controller: UIViewController?) -> UITabBarController? {
+        guard let controller else { return nil }
+        if let tabs = controller as? UITabBarController, tabs.tabBar === bar { return tabs }
+        for child in controller.children {
+            if let tabs = tabController(containing: bar, in: child) { return tabs }
+        }
+        return tabController(containing: bar, in: controller.presentedViewController)
+    }
+
+    private static func visibleTabItem(titled title: String, in root: UIView,
+                                       excluding content: UIView?, depth: Int = 0) -> UIView? {
+        guard depth < 40, root !== content, !(root is ShowcaseOverlayView),
+              !root.isHidden, root.alpha > 0.01, let window = root.window else { return nil }
+        if root.accessibilityLabel == title || (root as? UILabel)?.text == title {
+            var candidate: UIView? = root
+            for _ in 0..<5 {
+                guard let current = candidate else { break }
+                if current is UIControl || current is UICollectionViewCell {
+                    let rect = current.convert(current.bounds, to: window)
+                    if !rect.isEmpty, window.bounds.intersects(rect) { return current }
+                }
+                candidate = current.superview
+            }
+        }
+        for child in root.subviews {
+            if let item = visibleTabItem(titled: title, in: child, excluding: content, depth: depth + 1) {
+                return item
+            }
+        }
+        return nil
     }
 
     private static func accessibilityFrame(in object: NSObject, matching label: String,

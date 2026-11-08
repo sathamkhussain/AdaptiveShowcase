@@ -34,6 +34,83 @@ private struct ShowcaseTestScreen: View {
 
 final class ShowcaseRegressionTests: XCTestCase {
 
+    @MainActor func testSwiftUITabViewKeepsContentGuideThroughResizeAndRTL() async {
+        let state = ShowcaseExampleState()
+        let controller = UIHostingController(rootView:
+            TabView {
+                ShowcaseTestScreen(state: state)
+                    .tabItem { Label("Home", systemImage: "house") }
+                Text("Projects")
+                    .tabItem { Label("Projects", systemImage: "folder") }
+            }
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 466, height: 678))
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        func findOverlay(in view: UIView) -> ShowcaseOverlayView? {
+            if let overlay = view as? ShowcaseOverlayView { return overlay }
+            return view.subviews.lazy.compactMap { findOverlay(in: $0) }.first
+        }
+        for size in [CGSize(width: 466, height: 678), CGSize(width: 678, height: 466),
+                     CGSize(width: 951, height: 669), CGSize(width: 669, height: 951),
+                     CGSize(width: 466, height: 678)] {
+            for direction in [UISemanticContentAttribute.forceLeftToRight, .forceRightToLeft] {
+                window.semanticContentAttribute = direction
+                window.frame.size = size
+                controller.view.frame = window.bounds
+                for _ in 0..<20 {
+                    controller.view.setNeedsLayout()
+                    controller.view.layoutIfNeeded()
+                    try? await Task.sleep(nanoseconds: 20_000_000)
+                }
+                guard let overlay = findOverlay(in: controller.view) else {
+                    XCTFail("SwiftUI TabView lost its content guide after resizing to \(size)")
+                    continue
+                }
+                overlay.layoutIfNeeded()
+                let shade = overlay.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.first
+                XCTAssertEqual(shade?.path?.boundingBoxOfPath, overlay.bounds)
+                XCTAssertTrue(state.isPresented)
+            }
+        }
+        findOverlay(in: controller.view)?.dismiss(.cancelled)
+    }
+
+    @MainActor func testNativeTopTabOutsideHiddenBarFollowsRailRelocation() async {
+        let controller = UITabBarController()
+        let content = UIViewController()
+        content.tabBarItem = UITabBarItem(title: "Projects", image: nil, tag: 0)
+        controller.viewControllers = [content]
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 900, height: 678))
+        window.rootViewController = controller
+        window.isHidden = false
+        defer { window.isHidden = true }
+        controller.view.layoutIfNeeded()
+        controller.tabBar.isHidden = true
+        controller.view.subviews.forEach { $0.isHidden = true }
+        let button = UIButton(type: .system)
+        button.accessibilityLabel = "Projects"
+        button.frame = CGRect(x: 300, y: 30, width: 100, height: 44)
+        controller.view.addSubview(button)
+        let overlay = ShowcaseOverlayView(configuration: .init(title: "Projects", message: "Details."),
+                                          targetRect: {
+            ShowcaseOverlayView.tabItemRect(in: controller.tabBar, at: 0, convertedTo: $0)
+        }, completion: { _ in })
+        overlay.show(in: controller.view)
+        defer { overlay.dismiss(.cancelled) }
+        XCTAssertEqual(ShowcaseOverlayView.tabItemRect(in: controller.tabBar, at: 0, convertedTo: overlay),
+                       button.convert(button.bounds, to: overlay))
+        button.frame = CGRect(x: 20, y: 300, width: 44, height: 60)
+        for _ in 0..<20 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+            controller.view.layoutIfNeeded()
+        }
+        let shade = overlay.layer.sublayers?.compactMap { $0 as? CAShapeLayer }.first
+        XCTAssertEqual(shade?.path?.contains(CGPoint(x: 42, y: 330), using: .evenOdd), false)
+        XCTAssertEqual(shade?.path?.contains(CGPoint(x: 350, y: 52), using: .evenOdd), true)
+    }
+
     @MainActor func testSwiftUIShadeCoversSafeAreaWhilePanelStaysInsideIt() async {
         for insets in [
             UIEdgeInsets(top: 0, left: 0, bottom: 34, right: 84),
@@ -423,6 +500,9 @@ final class ShowcaseRegressionTests: XCTestCase {
     @MainActor func testShowcaseResolvesTabItemsInLTRAndRTLWithoutSelectingThem() {
         let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
         let controller = UITabBarController()
+        if #available(iOS 18.0, *) {
+            controller.traitOverrides.horizontalSizeClass = .compact
+        }
         controller.viewControllers = (0..<5).map { index in
             let viewController = UIViewController()
             viewController.tabBarItem = UITabBarItem(title: "Tab \(index)", image: nil, tag: index)
