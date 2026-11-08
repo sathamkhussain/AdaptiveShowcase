@@ -25,7 +25,8 @@ target.build_configurations.each do |config|
     'INFOPLIST_KEY_UIApplicationSceneManifest_Generation' => 'YES',
     'INFOPLIST_KEY_UILaunchScreen_Generation' => 'YES',
     'TARGETED_DEVICE_FAMILY' => '1,2',
-    'CODE_SIGNING_ALLOWED' => 'NO',
+    'CODE_SIGNING_ALLOWED' => 'YES',
+    'CODE_SIGN_STYLE' => 'Automatic',
     'MARKETING_VERSION' => '1.0',
     'CURRENT_PROJECT_VERSION' => '1'
   })
