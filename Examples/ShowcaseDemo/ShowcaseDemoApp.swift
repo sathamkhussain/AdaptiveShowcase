@@ -38,6 +38,33 @@ private struct StudioPage: View {
     }
 }
 
+private struct StudioGuideContent: View {
+    let step: ShowcaseStep
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(step.tabIndex == nil ? "YOUR WORKSPACE" : "PROJECTS",
+                  systemImage: step.tabIndex == nil ? "sparkles" : "folder.fill")
+                .font(.caption.bold())
+                .foregroundStyle(Color(red: 0.68, green: 0.92, blue: 0.83))
+            Text(step.title)
+                .font(.title3.bold())
+                .accessibilityAddTraits(.isHeader)
+            Text(step.message)
+                .font(.body)
+                .foregroundStyle(.white.opacity(0.85))
+            if step.tabIndex != nil {
+                Label("Brand exploration", systemImage: "paintpalette.fill")
+                    .font(.subheadline)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .foregroundStyle(.white)
+    }
+}
+
 private struct StudioDashboard: View {
     @State private var showingGuide = false
     private let ink = Color(red: 0.07, green: 0.19, blue: 0.29)
@@ -91,7 +118,9 @@ private struct StudioDashboard: View {
                          message: "Use the Projects tab to explore your ideas and pick up where you left off.",
                          nextTitle: "Done",
                          backgroundColor: UIColor(red: 0.04, green: 0.25, blue: 0.29, alpha: 1))
-        ])
+        ]) { step in
+            StudioGuideContent(step: step)
+        }
         .task {
             if ProcessInfo.processInfo.arguments.contains("--show-guide") {
                 try? await Task.sleep(nanoseconds: 700_000_000)
