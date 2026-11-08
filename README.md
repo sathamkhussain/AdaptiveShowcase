@@ -22,6 +22,8 @@ assets are used.
 
 The demo, SwiftUI `tabIndex` steps, `backgroundColor` option, and safe-area/
 overflow improvements shown here are included in `0.2.0`.
+Version `0.2.1` improves guide tracking during rotation and resizing, resolves
+relocated native tab items, and enables automatic signing for the demo app.
 
 ## Installation
 
@@ -31,12 +33,12 @@ In Xcode, choose **File > Add Package Dependencies** and enter:
 https://github.com/sathamkhussain/AdaptiveShowcase.git
 ```
 
-Select version `0.2.0` or add this dependency to your package:
+Select version `0.2.1` or add this dependency to your package:
 
 ```swift
 .package(
     url: "https://github.com/sathamkhussain/AdaptiveShowcase.git",
-    from: "0.2.0"
+    from: "0.2.1"
 )
 ```
 
